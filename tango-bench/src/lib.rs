@@ -1,3 +1,4 @@
+#![feature(rustc_private)]
 #[cfg(feature = "async")]
 pub use asynchronous::async_benchmark_fn;
 use core::ptr;
@@ -719,7 +720,9 @@ mod timer {
     pub(super) type ActiveTimer = x86::RdtscpTimer;
 
     #[cfg(not(all(feature = "hw-timer", target_arch = "x86_64")))]
-    pub(super) type ActiveTimer = PlatformTimer;
+    pub(super) type ActiveTimer = InstantTimer;
+    //pub(super) type ActiveTimer = CPUThreadTimer;
+    //pub(super) type ActiveTimer = UptimeTimer;
 
     pub(super) trait Timer<T> {
         fn start() -> T;
@@ -733,9 +736,9 @@ mod timer {
         }
     }
 
-    pub(super) struct PlatformTimer;
+    pub(super) struct InstantTimer;
 
-    impl Timer<Instant> for PlatformTimer {
+    impl Timer<Instant> for InstantTimer {
         #[inline]
         fn start() -> Instant {
             Instant::now()
@@ -744,6 +747,74 @@ mod timer {
         #[inline]
         fn stop(start_time: Instant) -> u64 {
             start_time.elapsed().as_nanos() as u64
+        }
+    }
+
+    type ClockType = u32;
+
+    use std::mem::MaybeUninit;
+    extern crate libc;
+    
+    #[inline]
+    fn clock(clockid: ClockType) -> u64 {
+        let mut tp: MaybeUninit<libc::timespec> = MaybeUninit::uninit();
+        let retval = unsafe { libc::clock_gettime(clockid, tp.as_mut_ptr()) };
+        debug_assert_eq!(retval, 0);
+        let instsec = unsafe { (*tp.as_ptr()).tv_sec };
+        let instnsec = unsafe { (*tp.as_ptr()).tv_nsec };
+        debug_assert!(instsec >= 0);
+        debug_assert!(instnsec >= 0);
+        instsec as u64 * 1_000_000_000 + instnsec as u64
+    }
+
+    pub(super) struct UptimeTimer;
+
+    impl Timer<u64> for UptimeTimer {
+        #[inline]
+        fn start() -> u64 {
+            // xxx warning this counts the passage of time even when the thread, threads, or the whole process is suspended, for example due to the operating system suspending it in order to let some other threads or processes have a turn using the CPU. So if this happens to occur during your benchmark run for some reason, this might give inaccurate results -- counting the time that passed while your code was suspended as part of the benchmark result. On the other hand when this doesn't happen, this is a pretty good clock because it just tells you how much time passed.
+            clock(libc::CLOCK_UPTIME_RAW)
+        }
+
+        #[inline]
+        fn stop(start_time: u64) -> u64 {
+            let stop_time = clock(libc::CLOCK_UPTIME_RAW);
+            debug_assert!(stop_time >= start_time);
+            stop_time - start_time
+        }
+    }
+
+    pub(super) struct CPUThreadTimer;
+
+    impl Timer<u64> for CPUThreadTimer {
+        #[inline]
+        fn start() -> u64 {
+            // xxx warning this counts the CPU time of only the current thread. So it will be very wrong if your benchmark spawns one or more subthreads and then this thread just blocks and waits for them to complete. Or, in general, if part of the work that you are attempting to benchmrk happens on a differnet thread, or involves timing of something other than CPU cycles. For example, if you are trying to benchmark how much time it takes to load data from persistent storage using different approaches, this clock will _not_ count all the time that your code is sitting and waiting for the operating system to get back to it with the data from disk -- it only counts CPU time taken by this thread. But I think this will be righter than most other options if what you want to benchmark is just the CPU usage in this thread.
+            clock(libc::CLOCK_THREAD_CPUTIME_ID)
+        }
+
+        #[inline]
+        fn stop(start_time: u64) -> u64 {
+            let stop_time = clock(libc::CLOCK_THREAD_CPUTIME_ID);
+            debug_assert!(stop_time >= start_time);
+            stop_time - start_time
+        }
+    }
+
+    pub(super) struct _CPUProcessTimer;
+
+    impl Timer<u64> for _CPUProcessTimer {
+        #[inline]
+        fn start() -> u64 {
+            // xxx warning this counts the CPU time of all threads in this process. So it will be very wrong if you use tango's `--parallel` option, although I think it will be righter than most other options if you don't.
+            clock(libc::CLOCK_PROCESS_CPUTIME_ID)
+        }
+
+        #[inline]
+        fn stop(start_time: u64) -> u64 {
+            let stop_time = clock(libc::CLOCK_PROCESS_CPUTIME_ID);
+            debug_assert!(stop_time >= start_time);
+            stop_time - start_time
         }
     }
 
