@@ -721,8 +721,9 @@ mod timer {
 
     #[cfg(not(all(feature = "hw-timer", target_arch = "x86_64")))]
     pub(super) type ActiveTimer = InstantTimer;
-    //pub(super) type ActiveTimer = CPUThreadTimer;
     //pub(super) type ActiveTimer = UptimeTimer;
+    //pub(super) type ActiveTimer = CPUProcessTimer;
+    //pub(super) type ActiveTimer = CPUThreadTimer;
 
     pub(super) trait Timer<T> {
         fn start() -> T;
@@ -801,9 +802,9 @@ mod timer {
         }
     }
 
-    pub(super) struct _CPUProcessTimer;
+    pub(super) struct CPUProcessTimer;
 
-    impl Timer<u64> for _CPUProcessTimer {
+    impl Timer<u64> for CPUProcessTimer {
         #[inline]
         fn start() -> u64 {
             // xxx warning this counts the CPU time of all threads in this process. So it will be very wrong if you use tango's `--parallel` option, although I think it will be righter than most other options if you don't.
